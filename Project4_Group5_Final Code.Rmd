@@ -1,0 +1,443 @@
+---
+title: "Project 4: Password Keystroke Dynamics"
+subtitle: "STAT 601: Group 5 (Fall 2024)"
+author: "Neha Karna, Prafulla Shrestha, 
+Aidan Stewart, Josh Lefdal, Shivam Bhardwaj"
+date: "18th Dec, 2024"
+output:
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F,warning=F,echo=F,cache = F,fig_height=10,fig_width=7)
+```
+
+```{r}
+library(readxl)
+library(GGally)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+
+```
+
+The passcode used by this code is : `.tie5Roanl`
+
+Dr. Roy Maxian and colleagues recruited 51 subjects at CMU. Subjects completed 8 data collection sessions, with each session composed of 50 times of typing the above passcode. Each session was one day apart. Each individual typed the passcode $8*50=400$ times in total of 8 sessions.
+
+If any errors in the sequence are detected, the subject is prompted to retype the passcode The subject must type the password correctly 50 times to complete a data-collection session. (There are no missing values in the data.)
+
+# Read the file and review the dataset
+
+```{r, warning=FALSE}
+library(readxl)
+#Read data files into R
+passcode.dat<- read.table("DSL-StrongPasswordData.txt", header = TRUE)
+
+#overview of the data
+head(passcode.dat)
+
+#we have total 31 timing variables to work with
+dim(passcode.dat)
+str(passcode.dat)
+
+# Check for missing values
+sum(is.na(passcode.dat))
+```
+
+```{r}
+# Timing summary of all variables
+timing_summary <- summary(passcode.dat[, grep("^(H\\.|DD\\.|UD\\.)", names(passcode.dat))])
+summary_text <- capture.output(timing_summary)
+
+timing_summary
+
+```
+
+```{r}
+library(dplyr)
+
+# Get unique subject IDs
+unique_subjects <- passcode.dat %>%
+    distinct(subject) %>%
+    pull(subject)  # Extract the subject column as a vector
+
+# Print subjects 
+cat("Subjects:\n", paste(unique_subjects, collapse = ", "))
+```
+
+> Task 1: Perform an exploratory analysis of the provided dataset (DSL.StrongPasswordData.csv). This will include developing appropriate response variables that are relevant to the question of interest. For example - the total time it takes to type the passcode. You will need to justify the choice of the final summary statistic.
+
+# Exploratory Data Analysis
+
+```{r}
+# Install gridExtra if not already installed
+if (!require(gridExtra)) install.packages("gridExtra")
+
+# Load the gridExtra package
+library(gridExtra)
+
+```
+
+## Histograms of Hold Times, Down-Down Times, Up-Down Times
+
+This section of the code creates and saves histograms to show the distribution of three main groups of variables: Hold Times (H.*), Down-Down Times (DD.*), and Up-Down Times (UD.*). These plots help us see how the timing data is spread out and spot any unusual patterns or outliers.
+
+```{r}
+
+# Create Histogram for all Hold Times
+hold_time_vars <- grep("^H\\.", names(passcode.dat), value = TRUE)
+hold_time_plots <- lapply(hold_time_vars, function(var) {
+    ggplot(passcode.dat, aes(x = passcode.dat[[var]])) +
+        geom_histogram(bins = 30, fill = "blue", color = "black") +
+        labs(title = paste("Distribution of", var), x = "Time (ms)")
+})
+grid_plot <- grid.arrange(grobs = hold_time_plots, nrow = 4) # arrange
+ggsave("Hold_time_histograms.png", plot = grid_plot, width = 12, height = 12) #save the plots
+
+# Down-Down times (DD.*)
+dd_time_vars <- grep("^DD\\.", names(passcode.dat), value = TRUE)
+Down_Down_plots <- lapply(dd_time_vars, function(var) {
+    ggplot(passcode.dat, aes(x = passcode.dat[[var]])) +
+        geom_histogram(bins = 30, fill = "green", color = "black") +
+        labs(title = paste("Distribution of", var), x = "Time (ms)")
+})
+grid_plot <- grid.arrange(grobs = Down_Down_plots, nrow = 4) # arrange
+ggsave("DD_histograms.png", plot = grid_plot, width = 12, height = 12) #save the plots
+
+
+# Up-Down times (UD.*)
+ud_time_vars <- grep("^UD\\.", names(passcode.dat), value = TRUE)
+Up_Down_plots <- lapply(ud_time_vars, function(var) {
+    ggplot(passcode.dat, aes(x = passcode.dat[[var]])) +
+        geom_histogram(bins = 30, fill = "orange", color="black") +
+        labs(title = paste("Distribution of", var), x = "Time (ms)")
+})
+grid_plot <- grid.arrange(grobs = Up_Down_plots, nrow = 4) # arrange
+
+
+```
+
+## Identifying Response Variable
+
+### DD-UD Pair plot
+
+This code creates a correlation graph with scatterplots to explore the relationships between Down-Down (DD) and Up-Down (UD) timing variables.
+
+```{r, fig.width=12, fig.height=12}
+# Filter columns that start with DD and UD, starting from the 5th column
+dd_ud_columns <- passcode.dat %>%
+  select(starts_with("DD"), starts_with("UD")) %>%
+  select(-1:-4) 
+
+# Create the correlation graph with density plots
+corr_plot<- ggpairs(dd_ud_columns, 
+        upper = list(continuous = wrap("cor", size = 3)), 
+        labeller = label_wrap_gen(10)) +
+  labs(title = "Scatterplot Matrix- Passcode: .tie5Roanl Up-Down and Down-Down Key time")
+
+```
+
+**Comment on Matrix:**
+
+-   Most of the UD time is highly correlated with DD time. Such as `UD.five.Shift--DD.five.Shift`, `UD.Shift.r.o--DD.Shift.r.o`, `UD.o.a--DD.o.a` and other are higher correlated with each other.
+-   Additionally, looking at the timing variable we found that `Down-Down (DD) Key` is the sum of `Up-Down (UD) and Hold (H) Key`.
+-   `DD` is the measure of the time between pressing down a certain key to pressing down another subsequent key.
+-   `UD` is the measure of the time a certain key is coming up to the time another subsequent key is pressed down.
+-   `H` is the amount of the time a certain key is held down This lead us to believe that `Total Typing Time` can be calculated as the sum of all `UDs` and `Hs`.
+
+Hence `Total Typing Time` is our response variable which is calculated for each rep and session
+
+### Calculate Total Typing Time
+
+Total typing time to type the whole passcode can be calculated as the sum of up-down (`UD`) time and hold time (`H`) for each key including `Return` key.
+
+```{r}
+# Identify columns that start with "H and UD" using grepl
+dd_columns <- grep("H\\.|UD\\.", names(passcode.dat), value = TRUE)
+
+#calculate total typing time as the sum of all Down-down time
+passcode.dat$TotalTypingTime <-rowSums(passcode.dat[,dd_columns])
+
+```
+
+# Visualization of total typing time throughout the session for subjects
+
+```{r}
+# Create new dataset to work with fewer variables
+passcode.total.dat <- passcode.dat %>%
+  select(subject, sessionIndex, rep, TotalTypingTime)
+```
+
+This code fits two linear mixed-effects models to analyze how the Total Typing Time changes over sessions while accounting for variability between subjects. It then compares these models to determine which one fits the data better.
+
+```{r}
+library(lme4)
+install.packages("lmerTest")
+
+library(lmerTest)
+
+# Fit a random intercept model
+lmer_model <- lmer(TotalTypingTime ~ sessionIndex + (1 | subject), data = passcode.total.dat)
+summary(lmer_model)
+
+
+```
+```{r}
+# Fit a random slope model
+lmer_model_slope <- lmer(TotalTypingTime ~ sessionIndex + (sessionIndex | subject), data = passcode.total.dat)
+summary(lmer_model_slope)
+```
+
+```{r}
+# Compare the models
+anova(lmer_model, lmer_model_slope)
+```
+
+***The results compare two models to see how Total Typing Time changes across sessions while accounting for differences between subjects. Both models show that typing time gets faster with each session. The simpler model assumes everyone improves at the same rate but starts at different typing times. The more flexible model allows each subject to have their own starting time and their own rate of improvement. The results show this flexible model fits the data much better (p-value < 2.2e-16), meaning some people improve faster than others. There’s also a strong negative correlation (-0.88) between starting times and improvement rates, suggesting that people who started off slower tended to improve the most over time.***
+
+
+```{r}
+# Plot residuals to check for normality and homogeneity
+par(mfrow = c(1, 2))
+hist(residuals(lmer_model), main = "Histogram of Residuals", xlab = "Residuals")
+qqnorm(residuals(lmer_model))
+qqline(residuals(lmer_model))
+```
+***The residual plots help us check if the assumptions of the model are being met. On the Histogram of Residuals (left), we can see that the residuals are heavily skewed to the right, with a large concentration of values around 0 but some extreme positive values. This suggests that the residuals are not normally distributed, which is a key assumption of linear models. The Normal Q-Q Plot (right) confirms this issue: while most residuals roughly follow the diagonal line (indicating normality), there are clear deviations in the upper tail. The extreme points (outliers) on the right side show that a small number of observations have much higher residuals than expected. Together, these plots suggest the need for transformations (log transformation) or further investigation into the extreme outliers to improve the model's performance and better meet the normality assumption.***
+
+This code identifies and extracts observations with extreme residuals from the random slope model. Residuals represent the difference between the observed typing times and the values predicted by the model. By setting a threshold of 10, the code filters out only those rows where the residuals are unusually large, indicating that the model struggled to accurately predict these specific typing times.
+
+```{r}
+library(dplyr)
+extreme_residuals <- data.frame(passcode.total.dat, Residuals = residuals(lmer_model_slope)) %>%
+    filter(Residuals > 10)  # Adjust threshold as needed
+print(extreme_residuals)
+
+```
+
+```{r}
+passcode.total.dat$log_TotalTypingTime <- log(passcode.total.dat$TotalTypingTime)
+
+# Fit the model with log-transformed response
+lmer_model_log <- lmer(log_TotalTypingTime ~ sessionIndex + (sessionIndex | subject),
+                       data = passcode.total.dat,
+                       control = lmerControl(optimizer = "nloptwrap", optCtrl = list(maxfun = 1e5)))
+
+summary(lmer_model_log)
+```
+***This output comes from a linear mixed model analyzing how the log of Total Typing Time changes over sessions while accounting for individual differences between subjects.***
+
+```{r}
+par(mfrow = c(1, 2))
+hist(residuals(lmer_model_log), main = "Histogram of Residuals (Log Model)", xlab = "Residuals")
+qqnorm(residuals(lmer_model_log))
+qqline(residuals(lmer_model_log))
+```
+***The log transformation improved the residuals' distribution and reduced skewness, but a few extreme values remain in the upper tail. Overall, the model assumptions are better met with the log-transformed response variable.***
+
+This output shows the estimated marginal means (emmeans) and pairwise contrast comparisons for total typing time across the 8 sessions.
+
+```{r}
+library(emmeans)
+
+# Explicitly specify pairwise contrasts for sessionIndex
+emmeans_results <- emmeans(lmer_model_log, pairwise ~ sessionIndex, adjust = "bonferroni")
+print(emmeans_results)
+
+```
+***Typing time improves significantly in the earlier sessions and then levels off, as indicated by smaller differences between later sessions.***
+
+This code finalizes the analysis by converting sessionIndex to a categorical factor, refitting the model, performing pairwise tests to compare typing times across sessions, and checking session data distribution for consistency.
+```{r}
+# Convert sessionIndex to factor
+passcode.total.dat$sessionIndex <- as.factor(passcode.total.dat$sessionIndex)
+
+# Refit the model
+lmer_model_log <- lmer(log_TotalTypingTime ~ sessionIndex + (sessionIndex | subject), data = passcode.total.dat)
+
+# Pairwise comparisons
+library(emmeans)
+emmeans_results <- emmeans(lmer_model_log, pairwise ~ sessionIndex, adjust = "bonferroni")
+print(emmeans_results)
+```
+
+```{r}
+table(passcode.total.dat$sessionIndex)
+```
+
+```{r}
+library(ggplot2)
+
+# Extract pairwise results
+pairwise_results <- as.data.frame(emmeans_results$contrasts)
+
+# Filter significant comparisons
+pairwise_results <- pairwise_results[pairwise_results$p.value < 0.05, ]
+
+# Plot significant pairwise differences
+ggplot(pairwise_results, aes(x = contrast, y = estimate)) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    geom_errorbar(aes(ymin = estimate - SE, ymax = estimate + SE), width = 0.2) +
+    coord_flip() +
+    labs(title = "Significant Pairwise Differences",
+         x = "Pairwise Comparisons", y = "Difference in Log Typing Time")
+
+```
+
+
+
+
+
+
+
+
+
+# RESPONSE VARIABLE 2
+
+# Looking at the response variable "up-time" which is looking at the time between holding down keys to look at hesitation.
+
+
+
+```{r}
+
+# List all column names containing "UD"
+ud_vars <- grep("UD", names(passcode.dat), value = TRUE)
+
+# Print the UD variables
+print(ud_vars)
+
+
+# Summarize all UD variables
+ud_summary <- passcode.dat %>%
+  select(subject, sessionIndex, all_of(ud_vars)) %>%
+  pivot_longer(cols = all_of(ud_vars), names_to = "UD_Variable", values_to = "UD_Value") %>%
+  group_by(sessionIndex, UD_Variable) %>%
+  summarize(
+    Mean = mean(UD_Value, na.rm = TRUE),
+    SD = sd(UD_Value, na.rm = TRUE),
+    Min = min(UD_Value, na.rm = TRUE),
+    Median = median(UD_Value, na.rm = TRUE),
+    Max = max(UD_Value, na.rm = TRUE)
+  )
+
+# View the summary
+print(ud_summary)
+
+
+```
+
+
+```{r}
+
+library(ggplot2)
+
+# Plot UD variables across sessions
+ggplot(ud_summary, aes(x = sessionIndex, y = Mean, group = UD_Variable, color = UD_Variable)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Mean Up-Down Times Across Sessions",
+       x = "Session Index", y = "Mean UD Time",
+       color = "Key Transition (UD)") +
+  theme_minimal()
+
+# Reshape data for boxplots
+ud_long <- passcode.dat %>%
+  select(subject, sessionIndex, all_of(ud_vars)) %>%
+  pivot_longer(cols = all_of(ud_vars), names_to = "UD_Variable", values_to = "UD_Value")
+
+# Boxplot of UD times
+ggplot(ud_long, aes(x = sessionIndex, y = UD_Value, fill = sessionIndex)) +
+  geom_boxplot() +
+  facet_wrap(~ UD_Variable, scales = "free_y") +
+  labs(title = "Distribution of UD Times Across Sessions",
+       x = "Session Index", y = "UD Time") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+
+# Aggregate the sum of UD variables by subject and session
+ud_sum <- ud_long %>%
+  group_by(subject, sessionIndex) %>%
+  summarize(Sum_UD_Value = sum(UD_Value, na.rm = TRUE), .groups = "drop")
+
+ud_sum$sessionIndex <- as.factor(ud_sum$sessionIndex)
+
+```
+
+
+```{r}
+
+# Fit the Linear Mixed-effects model
+lmer_sum_ud <- lmer(Sum_UD_Value ~ sessionIndex + (1 | subject), 
+                    data = ud_sum, 
+                    control = lmerControl(optimizer = "nloptwrap", optCtrl = list(maxfun = 1e5)))
+
+summary(lmer_sum_ud)
+
+```
+
+
+
+```{r}
+
+# Calculate EMMs for sessionIndex
+emmeans_sum_ud <- emmeans(lmer_sum_ud, ~ sessionIndex)
+
+# Pairwise comparisons between sessions
+pairwise_contrasts <- contrast(emmeans_sum_ud, method = "pairwise", adjust = "bonferroni")
+
+# Print results
+emmeans_sum_ud
+pairwise_contrasts
+
+```
+
+
+
+
+```{r}
+
+# Convert emmeans results to a data frame
+emmeans_df <- as.data.frame(emmeans_sum_ud)
+
+# Plot the EMMs with confidence intervals
+ggplot(emmeans_df, aes(x = sessionIndex, y = emmean)) +
+  geom_line() +
+  geom_point() +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.2) +
+  labs(title = "Marginal Means of Sum of UD Values Across Sessions",
+       x = "Session Index",
+       y = "Estimated Marginal Mean (Sum of UD Values)") +
+  theme_minimal()
+
+
+```
+
+
+
+```{r}
+
+# Perform pairwise comparisons
+pairwise_results <- as.data.frame(pairwise_contrasts)
+
+# Filter significant comparisons (p < 0.05)
+significant_pairs <- pairwise_results %>%
+  filter(p.value < 0.05)
+
+# Plot significant pairwise differences
+ggplot(significant_pairs, aes(x = contrast, y = estimate)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_errorbar(aes(ymin = estimate - SE, ymax = estimate + SE), width = 0.2) +
+  coord_flip() +
+  labs(title = "Significant Pairwise Differences for Sum of UD Values",
+       x = "Pairwise Comparisons", 
+       y = "Difference in Sum of UD Values (Estimate)") +
+  theme_minimal()
+
+```
